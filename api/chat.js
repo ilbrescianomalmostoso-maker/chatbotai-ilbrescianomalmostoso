@@ -25,17 +25,20 @@ async function shopifyFetch(query) {
   }
 }
 
-// --- 2. DEFINIZIONE STRUMENTI ---
-async function getBestSellers() {
-  // AGGIORNAMENTO: Ora chiediamo anche 'featuredImage'
+// --- 2. DEFINIZIONE STRUMENTI (AGGIORNATA: Cerca Prodotti) ---
+async function searchProducts(keyword) {
+  // Se c'è una parola chiave, costruiamo il filtro per Shopify
+  // Se non c'è (l'utente vuole solo consigli), lasciamo vuoto per vedere tutto
+  const searchFilter = keyword ? `, query: "title:*${keyword}*"` : "";
+
   const query = `{
-    products(first: 5) {
+    products(first: 5 ${searchFilter}) {
       edges {
         node {
           title
           handle
           totalInventory
-          featuredImage { url } 
+          featuredImage { url }
           priceRange { minVariantPrice { amount currencyCode } }
         }
       }
@@ -45,12 +48,13 @@ async function getBestSellers() {
   const data = await shopifyFetch(query);
   const products = data?.data?.products?.edges || [];
   
+  if (products.length === 0) return [];
+
   return products.map(p => ({
     name: p.node.title,
     price: p.node.priceRange.minVariantPrice.amount + " " + p.node.priceRange.minVariantPrice.currencyCode,
     stock: p.node.totalInventory,
-    // Gestiamo il caso in cui il prodotto non abbia immagini
-    image: p.node.featuredImage ? p.node.featuredImage.url : "", 
+    image: p.node.featuredImage ? p.node.featuredImage.url : "",
     link: `https://${cleanDomain}/products/${p.node.handle}`
   }));
 }
@@ -59,15 +63,24 @@ const tools = [
   {
     function_declarations: [
       {
-        name: "getBestSellers",
-        description: "Ottiene i prodotti best seller con prezzi, stock, link e URL immagine.",
+        name: "searchProducts",
+        description: "Cerca prodotti specifici nel catalogo o mostra i best seller.",
+        parameters: {
+            type: "OBJECT",
+            properties: {
+                keyword: {
+                    type: "STRING",
+                    description: "La parola chiave da cercare (es. 'braccialetto', 'maglia'). Lascia vuoto se la richiesta è generica."
+                }
+            }
+        }
       }
     ],
   },
 ];
 
 // --- 3. CONFIGURAZIONE MODELLO ---
-// Nota: Usa pure il modello che preferisci (es. gemini-2.5-flash)
+// Usa pure gemini-2.5-flash o gemini-1.5-flash a tua scelta
 const model = genAI.getGenerativeModel({
   model: "gemini-2.5-flash-lite", 
   tools: tools
@@ -88,12 +101,11 @@ export default async function handler(req, res) {
     const chat = model.startChat({
       history: history || [],
       system_instruction: {
-        // ISTRUZIONI AGGIORNATE: Diciamo all'AI come formattare immagini e link
-        parts: [{ text: `Sei un personal shopper. 
-        Quando consigli un prodotto:
-        1. Mostra l'immagine usando questo formato Markdown: ![Titolo Prodotto](URL_IMMAGINE)
-        2. Metti il link all'acquisto usando questo formato: [Acquista Ora](URL_LINK)
-        3. Indica il prezzo.` }]
+        parts: [{ text: `Sei un personal shopper.
+        Quando mostri un prodotto, usa questo formato esatto:
+        1. Immagine: ![Titolo](URL_IMMAGINE)
+        2. Link: [Acquista qui](URL_LINK)
+        3. Prezzo e Descrizione breve.` }]
       }
     });
 
@@ -103,13 +115,19 @@ export default async function handler(req, res) {
 
     if (functionCalls && functionCalls.length > 0) {
       const call = functionCalls[0];
-      if (call.name === "getBestSellers") {
-        const productData = await getBestSellers();
+      
+      // Qui intercettiamo la chiamata "searchProducts"
+      if (call.name === "searchProducts") {
+        // Leggiamo cosa vuole cercare l'utente (es. "braccialetto")
+        const args = call.args; 
+        const keyword = args.keyword || "";
+
+        const productData = await searchProducts(keyword);
         
         const result2 = await chat.sendMessage(
           [{
             functionResponse: {
-              name: "getBestSellers",
+              name: "searchProducts",
               response: { products: productData }
             }
           }]
