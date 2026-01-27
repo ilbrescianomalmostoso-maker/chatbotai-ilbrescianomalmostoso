@@ -59,8 +59,8 @@ const tools = [
   },
 ];
 
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-001", tools });
-
+// Cambia la riga del modello con questa:
+const model = genAI.getGenerativeModel({ model: "gemini-pro", tools });
 export default async function handler(req, res) {
   // CORS (Permette al tuo sito di chiamare questo server)
   res.setHeader('Access-Control-Allow-Origin', '*');
