@@ -60,7 +60,7 @@ const tools = [
 ];
 
 // Cambia la riga del modello con questa:
-const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview", tools });
+const model = genAI.getGenerativeModel({ model: "gemini-3-pro-preview", tools });
 export default async function handler(req, res) {
   // CORS (Permette al tuo sito di chiamare questo server)
   res.setHeader('Access-Control-Allow-Origin', '*');
