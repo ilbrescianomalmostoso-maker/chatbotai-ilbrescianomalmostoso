@@ -25,22 +25,22 @@ async function shopifyFetch(query) {
   }
 }
 
-// --- 2. DEFINIZIONE STRUMENTI (RICERCA AVANZATA) ---
+// --- 2. DEFINIZIONE STRUMENTI (RICERCA ROBUSTA) ---
 async function searchProducts(keyword) {
-  // LOGICA AVANZATA:
-  // Se c'è una parola chiave, costruiamo una query che cerca in:
-  // - Titolo (title)
-  // - Tipo di prodotto (product_type)
-  // - Tag (tag)
-  // L'asterisco * serve per trovare anche parti di parola (es. "shirt" trova "t-shirt")
+  // FIX CRUCIALE: Rimuoviamo asterischi iniziali che rompono Shopify.
+  // Usiamo "keyword*" che cerca "keyword" e tutto ciò che inizia con essa.
+  // Esempio: "Accendin*" trova "Accendino", "Accendini", "Accendino Clipper".
   
   let searchFilter = "";
   if (keyword) {
-      searchFilter = `, query: "title:*${keyword}* OR product_type:*${keyword}* OR tag:*${keyword}*"`;
+      // Pulizia extra: togliamo spazi extra
+      const cleanKeyword = keyword.trim();
+      searchFilter = `, query: "${cleanKeyword}*"`;
   }
 
+  // Chiediamo i primi 10 prodotti per avere più chance di trovare quello giusto
   const query = `{
-    products(first: 5 ${searchFilter}, sortKey: RELEVANCE) {
+    products(first: 10 ${searchFilter}, sortKey: RELEVANCE) {
       edges {
         node {
           title
@@ -61,7 +61,7 @@ async function searchProducts(keyword) {
 
   return products.map(p => ({
     name: p.node.title,
-    type: p.node.productType, // Utile per l'AI per capire se ha trovato la cosa giusta
+    type: p.node.productType,
     price: p.node.priceRange.minVariantPrice.amount + " " + p.node.priceRange.minVariantPrice.currencyCode,
     stock: p.node.totalInventory,
     image: p.node.featuredImage ? p.node.featuredImage.url : "",
@@ -74,13 +74,13 @@ const tools = [
     function_declarations: [
       {
         name: "searchProducts",
-        description: "Cerca prodotti nel catalogo. Usa questo strumento quando l'utente cerca qualcosa di specifico.",
+        description: "Cerca prodotti nel catalogo.",
         parameters: {
             type: "OBJECT",
             properties: {
                 keyword: {
                     type: "STRING",
-                    description: "La parola chiave da cercare. IMPORTANTE: Traduci sinonimi in termini standard (es. se utente dice 'maglietta' tu cerca 't-shirt' o 'shirt')."
+                    description: "La parola chiave SINGOLARE da cercare (es. se utente dice 'accendini', cerca 'accendino')."
                 }
             }
         }
@@ -90,8 +90,9 @@ const tools = [
 ];
 
 // --- 3. CONFIGURAZIONE MODELLO ---
+// Usa il modello che preferisci (2.5-flash o 1.5-flash)
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash", // O 1.5-flash a tua scelta
+  model: "gemini-2.5-flash", 
   tools: tools
 });
 
@@ -110,16 +111,21 @@ export default async function handler(req, res) {
     const chat = model.startChat({
       history: history || [],
       system_instruction: {
-        // ISTRUZIONI INTELLIGENTI
-        parts: [{ text: `Sei un personal shopper esperto. Il tuo obiettivo è capire l'intento del cliente.
+        // ISTRUZIONI PER "TRADURRE" LE RICHIESTE DEGLI UTENTI
+        parts: [{ text: `Sei un assistente allo shopping intelligente.
         
-        REGOLE FONDAMENTALI:
-        1. SINONIMI: Se il cliente usa parole comuni (es. "maglietta", "calzoni"), tu DEVI tradurle mentalmente nei termini più probabili del catalogo (es. "T-Shirt", "Pants", "Jeans") PRIMA di chiamare la funzione di ricerca.
-        2. FORMATO: Quando mostri un prodotto, usa SEMPRE questo formato:
-           ![Titolo](URL_IMMAGINE)
-           [Acquista qui](URL_LINK)
-           Prezzo: XX €
-        3. Se la ricerca non dà risultati, suggerisci termini alternativi o prodotti simili.` }]
+        REGOLE D'ORO PER LA RICERCA:
+        1. TRADUZIONE MENTALE: L'utente non sa come si chiamano i prodotti. Tu devi capirlo.
+           - Se cerca "Maglietta" -> Cerca "T-Shirt"
+           - Se cerca "Felpa" -> Cerca "Hoodie" o "Crewneck"
+        2. SINGOLARE: Converti SEMPRE le parole al singolare prima di cercare (es. "braccialetti" -> "braccialetto").
+        
+        FORMATO RISPOSTA:
+        Quando trovi prodotti, mostrali così:
+        ![Titolo](URL_IMMAGINE)
+        [Vedi Dettagli](URL_LINK)
+        Prezzo: XX €
+        ` }]
       }
     });
 
@@ -134,10 +140,8 @@ export default async function handler(req, res) {
         const args = call.args; 
         const keyword = args.keyword || "";
 
-        // Eseguiamo la ricerca
         const productData = await searchProducts(keyword);
         
-        // Restituiamo i dati all'AI
         const result2 = await chat.sendMessage(
           [{
             functionResponse: {
