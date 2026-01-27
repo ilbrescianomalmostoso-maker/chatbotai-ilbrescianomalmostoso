@@ -4,8 +4,11 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_URL;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
+// --- FIX IMPORTANTE: Definiamo cleanDomain qui in alto, così è visibile ovunque ---
+const cleanDomain = SHOPIFY_DOMAIN ? SHOPIFY_DOMAIN.replace('https://', '').replace(/\/$/, '') : "";
+
+// --- 1. FUNZIONE SHOPIFY ---
 async function shopifyFetch(query) {
-  const cleanDomain = SHOPIFY_DOMAIN.replace('https://', '').replace(/\/$/, '');
   const url = `https://${cleanDomain}/admin/api/2024-01/graphql.json`;
 
   try {
@@ -24,6 +27,7 @@ async function shopifyFetch(query) {
   }
 }
 
+// --- 2. DEFINIZIONE STRUMENTI ---
 async function getBestSellers() {
   const query = `{
     products(first: 5) {
@@ -37,8 +41,11 @@ async function getBestSellers() {
       }
     }
   }`;
+  
   const data = await shopifyFetch(query);
   const products = data?.data?.products?.edges || [];
+  
+  // Ora 'cleanDomain' è visibile qui e non darà più errore
   return products.map(p => ({
     name: p.node.title,
     price: p.node.priceRange.minVariantPrice.amount + " " + p.node.priceRange.minVariantPrice.currencyCode,
@@ -58,12 +65,14 @@ const tools = [
   },
 ];
 
-// MODELLO STABILE E GRATUITO
+// --- 3. CONFIGURAZIONE MODELLO ---
+// Nota: Puoi lasciare gemini-1.5-flash o rimettere gemini-2.0-flash se preferisci
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash",
+  model: "gemini-2.5-flash", 
   tools: tools
 });
 
+// --- 4. HANDLER SERVER ---
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -74,6 +83,7 @@ export default async function handler(req, res) {
 
   try {
     const { message, history } = req.body;
+
     const chat = model.startChat({
       history: history || [],
       system_instruction: {
@@ -89,6 +99,7 @@ export default async function handler(req, res) {
       const call = functionCalls[0];
       if (call.name === "getBestSellers") {
         const productData = await getBestSellers();
+        
         const result2 = await chat.sendMessage(
           [{
             functionResponse: {
@@ -100,7 +111,9 @@ export default async function handler(req, res) {
         return res.status(200).json({ text: result2.response.text() });
       }
     }
+
     return res.status(200).json({ text: response.text() });
+
   } catch (error) {
     console.error("Server Error:", error);
     return res.status(500).json({ error: error.message });
