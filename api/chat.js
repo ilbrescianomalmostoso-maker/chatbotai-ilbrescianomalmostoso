@@ -80,7 +80,7 @@ const tools = [
 
 // Inizializza il modello con i tools
 const model = genAI.getGenerativeModel({ 
-  model: "gemini-3-flash-preview", 
+  model: "gemini-3-pro-preview", 
   tools: tools 
 });
 
