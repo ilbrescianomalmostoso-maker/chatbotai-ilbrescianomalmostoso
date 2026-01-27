@@ -4,13 +4,11 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_URL;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-// --- FIX IMPORTANTE: Definiamo cleanDomain qui in alto, così è visibile ovunque ---
 const cleanDomain = SHOPIFY_DOMAIN ? SHOPIFY_DOMAIN.replace('https://', '').replace(/\/$/, '') : "";
 
 // --- 1. FUNZIONE SHOPIFY ---
 async function shopifyFetch(query) {
   const url = `https://${cleanDomain}/admin/api/2024-01/graphql.json`;
-
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -29,6 +27,7 @@ async function shopifyFetch(query) {
 
 // --- 2. DEFINIZIONE STRUMENTI ---
 async function getBestSellers() {
+  // AGGIORNAMENTO: Ora chiediamo anche 'featuredImage'
   const query = `{
     products(first: 5) {
       edges {
@@ -36,6 +35,7 @@ async function getBestSellers() {
           title
           handle
           totalInventory
+          featuredImage { url } 
           priceRange { minVariantPrice { amount currencyCode } }
         }
       }
@@ -45,11 +45,12 @@ async function getBestSellers() {
   const data = await shopifyFetch(query);
   const products = data?.data?.products?.edges || [];
   
-  // Ora 'cleanDomain' è visibile qui e non darà più errore
   return products.map(p => ({
     name: p.node.title,
     price: p.node.priceRange.minVariantPrice.amount + " " + p.node.priceRange.minVariantPrice.currencyCode,
     stock: p.node.totalInventory,
+    // Gestiamo il caso in cui il prodotto non abbia immagini
+    image: p.node.featuredImage ? p.node.featuredImage.url : "", 
     link: `https://${cleanDomain}/products/${p.node.handle}`
   }));
 }
@@ -59,16 +60,16 @@ const tools = [
     function_declarations: [
       {
         name: "getBestSellers",
-        description: "Ottiene la lista dei prodotti best seller con prezzi e stock.",
+        description: "Ottiene i prodotti best seller con prezzi, stock, link e URL immagine.",
       }
     ],
   },
 ];
 
 // --- 3. CONFIGURAZIONE MODELLO ---
-// Nota: Puoi lasciare gemini-1.5-flash o rimettere gemini-2.0-flash se preferisci
+// Nota: Usa pure il modello che preferisci (es. gemini-2.5-flash)
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash", 
+  model: "gemini-1.5-flash", 
   tools: tools
 });
 
@@ -87,7 +88,12 @@ export default async function handler(req, res) {
     const chat = model.startChat({
       history: history || [],
       system_instruction: {
-        parts: [{ text: "Sei un personal shopper esperto. Rispondi in modo rapido e amichevole. Se consigli prodotti, usa sempre i dati reali forniti dallo strumento." }]
+        // ISTRUZIONI AGGIORNATE: Diciamo all'AI come formattare immagini e link
+        parts: [{ text: `Sei un personal shopper. 
+        Quando consigli un prodotto:
+        1. Mostra l'immagine usando questo formato Markdown: ![Titolo Prodotto](URL_IMMAGINE)
+        2. Metti il link all'acquisto usando questo formato: [Acquista Ora](URL_LINK)
+        3. Indica il prezzo.` }]
       }
     });
 
