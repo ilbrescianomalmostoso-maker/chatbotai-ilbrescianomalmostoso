@@ -25,19 +25,28 @@ async function shopifyFetch(query) {
   }
 }
 
-// --- 2. DEFINIZIONE STRUMENTI (AGGIORNATA: Cerca Prodotti) ---
+// --- 2. DEFINIZIONE STRUMENTI (RICERCA AVANZATA) ---
 async function searchProducts(keyword) {
-  // Se c'è una parola chiave, costruiamo il filtro per Shopify
-  // Se non c'è (l'utente vuole solo consigli), lasciamo vuoto per vedere tutto
-  const searchFilter = keyword ? `, query: "title:*${keyword}*"` : "";
+  // LOGICA AVANZATA:
+  // Se c'è una parola chiave, costruiamo una query che cerca in:
+  // - Titolo (title)
+  // - Tipo di prodotto (product_type)
+  // - Tag (tag)
+  // L'asterisco * serve per trovare anche parti di parola (es. "shirt" trova "t-shirt")
+  
+  let searchFilter = "";
+  if (keyword) {
+      searchFilter = `, query: "title:*${keyword}* OR product_type:*${keyword}* OR tag:*${keyword}*"`;
+  }
 
   const query = `{
-    products(first: 5 ${searchFilter}) {
+    products(first: 5 ${searchFilter}, sortKey: RELEVANCE) {
       edges {
         node {
           title
           handle
           totalInventory
+          productType
           featuredImage { url }
           priceRange { minVariantPrice { amount currencyCode } }
         }
@@ -52,6 +61,7 @@ async function searchProducts(keyword) {
 
   return products.map(p => ({
     name: p.node.title,
+    type: p.node.productType, // Utile per l'AI per capire se ha trovato la cosa giusta
     price: p.node.priceRange.minVariantPrice.amount + " " + p.node.priceRange.minVariantPrice.currencyCode,
     stock: p.node.totalInventory,
     image: p.node.featuredImage ? p.node.featuredImage.url : "",
@@ -64,13 +74,13 @@ const tools = [
     function_declarations: [
       {
         name: "searchProducts",
-        description: "Cerca prodotti specifici nel catalogo o mostra i best seller.",
+        description: "Cerca prodotti nel catalogo. Usa questo strumento quando l'utente cerca qualcosa di specifico.",
         parameters: {
             type: "OBJECT",
             properties: {
                 keyword: {
                     type: "STRING",
-                    description: "La parola chiave da cercare (es. 'braccialetto', 'maglia'). Lascia vuoto se la richiesta è generica."
+                    description: "La parola chiave da cercare. IMPORTANTE: Traduci sinonimi in termini standard (es. se utente dice 'maglietta' tu cerca 't-shirt' o 'shirt')."
                 }
             }
         }
@@ -80,9 +90,8 @@ const tools = [
 ];
 
 // --- 3. CONFIGURAZIONE MODELLO ---
-// Usa pure gemini-2.5-flash o gemini-1.5-flash a tua scelta
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash-lite", 
+  model: "gemini-2.5-flash", // O 1.5-flash a tua scelta
   tools: tools
 });
 
@@ -101,11 +110,16 @@ export default async function handler(req, res) {
     const chat = model.startChat({
       history: history || [],
       system_instruction: {
-        parts: [{ text: `Sei un personal shopper.
-        Quando mostri un prodotto, usa questo formato esatto:
-        1. Immagine: ![Titolo](URL_IMMAGINE)
-        2. Link: [Acquista qui](URL_LINK)
-        3. Prezzo e Descrizione breve.` }]
+        // ISTRUZIONI INTELLIGENTI
+        parts: [{ text: `Sei un personal shopper esperto. Il tuo obiettivo è capire l'intento del cliente.
+        
+        REGOLE FONDAMENTALI:
+        1. SINONIMI: Se il cliente usa parole comuni (es. "maglietta", "calzoni"), tu DEVI tradurle mentalmente nei termini più probabili del catalogo (es. "T-Shirt", "Pants", "Jeans") PRIMA di chiamare la funzione di ricerca.
+        2. FORMATO: Quando mostri un prodotto, usa SEMPRE questo formato:
+           ![Titolo](URL_IMMAGINE)
+           [Acquista qui](URL_LINK)
+           Prezzo: XX €
+        3. Se la ricerca non dà risultati, suggerisci termini alternativi o prodotti simili.` }]
       }
     });
 
@@ -116,14 +130,14 @@ export default async function handler(req, res) {
     if (functionCalls && functionCalls.length > 0) {
       const call = functionCalls[0];
       
-      // Qui intercettiamo la chiamata "searchProducts"
       if (call.name === "searchProducts") {
-        // Leggiamo cosa vuole cercare l'utente (es. "braccialetto")
         const args = call.args; 
         const keyword = args.keyword || "";
 
+        // Eseguiamo la ricerca
         const productData = await searchProducts(keyword);
         
+        // Restituiamo i dati all'AI
         const result2 = await chat.sendMessage(
           [{
             functionResponse: {
