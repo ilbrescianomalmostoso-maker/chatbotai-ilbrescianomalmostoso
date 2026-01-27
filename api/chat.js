@@ -4,7 +4,6 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_URL;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-// Funzione Helper per parlare con Shopify
 async function shopifyFetch(query) {
   const cleanDomain = SHOPIFY_DOMAIN.replace('https://', '').replace(/\/$/, '');
   const url = `https://${cleanDomain}/admin/api/2024-01/graphql.json`;
@@ -25,7 +24,6 @@ async function shopifyFetch(query) {
   }
 }
 
-// Strumento: Get Best Sellers
 async function getBestSellers() {
   const query = `{
     products(first: 5) {
@@ -42,32 +40,31 @@ async function getBestSellers() {
   const data = await shopifyFetch(query);
   const products = data?.data?.products?.edges || [];
   return products.map(p => ({
-    title: p.node.title,
+    name: p.node.title,
     price: p.node.priceRange.minVariantPrice.amount + " " + p.node.priceRange.minVariantPrice.currencyCode,
-    stock: p.node.totalInventory
+    stock: p.node.totalInventory,
+    link: `https://${cleanDomain}/products/${p.node.handle}`
   }));
 }
 
-// Configurazione AI
 const tools = [
   {
     function_declarations: [
       {
         name: "getBestSellers",
-        description: "Restituisce i prodotti best seller con prezzi e stock.",
+        description: "Ottiene la lista dei prodotti best seller con prezzi e stock.",
       }
     ],
   },
 ];
 
+// MODELLO STABILE E GRATUITO
 const model = genAI.getGenerativeModel({
-  model: "gemini-3-pro-preview",
+  model: "gemini-1.5-flash",
   tools: tools
 });
 
-// Handler Principale
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -77,11 +74,10 @@ export default async function handler(req, res) {
 
   try {
     const { message, history } = req.body;
-
     const chat = model.startChat({
       history: history || [],
       system_instruction: {
-        parts: [{ text: "Sei un personal shopper. Consiglia i prodotti best seller se richiesto. Usa sempre prezzi e link." }]
+        parts: [{ text: "Sei un personal shopper esperto. Rispondi in modo rapido e amichevole. Se consigli prodotti, usa sempre i dati reali forniti dallo strumento." }]
       }
     });
 
@@ -104,9 +100,7 @@ export default async function handler(req, res) {
         return res.status(200).json({ text: result2.response.text() });
       }
     }
-
     return res.status(200).json({ text: response.text() });
-
   } catch (error) {
     console.error("Server Error:", error);
     return res.status(500).json({ error: error.message });
