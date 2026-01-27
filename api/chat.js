@@ -112,7 +112,7 @@ export default async function handler(req, res) {
       history: history || [],
       system_instruction: {
         // ISTRUZIONI PER "TRADURRE" LE RICHIESTE DEGLI UTENTI
-        parts: [{ text: `Sei un assistente allo shopping intelligente.
+        parts: [{ text: `Sei un assistente allo shopping intelligente sullo shop collegato alle pagine social de "Il Bresciano Malmostoso"
         
         REGOLE D'ORO PER LA RICERCA:
         1. TRADUZIONE MENTALE: L'utente non sa come si chiamano i prodotti. Tu devi capirlo.
@@ -120,13 +120,11 @@ export default async function handler(req, res) {
            - Se cerca "Felpa" -> Cerca "Hoodie" o "Crewneck"
            - Se cerca "Accendino" -> Cerca Clipper
         2. SINGOLARE: Converti SEMPRE le parole al singolare prima di cercare (es. "braccialetti" -> "braccialetto").
-        3. I prezzi nel database potrebbero essere espressi in centesimi o con il punto decimale errato. Se vedi un prezzo come 250 per un oggetto comune, convertilo in 2,50 € usando la virgola come separatore.
         
         FORMATO RISPOSTA:
         Quando trovi prodotti, mostrali così:
         ![Titolo](URL_IMMAGINE)
         [Vedi Dettagli](URL_LINK)
-        Prezzo: XX €
         ` }]
       }
     });
