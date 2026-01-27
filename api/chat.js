@@ -125,6 +125,7 @@ export default async function handler(req, res) {
         Quando trovi prodotti, mostrali così:
         ![Titolo](URL_IMMAGINE)
         [Vedi Dettagli](URL_LINK)
+        Non mostrare i prezzi, solo il link.
         ` }]
       }
     });
