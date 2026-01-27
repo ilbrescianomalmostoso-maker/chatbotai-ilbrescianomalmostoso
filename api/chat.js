@@ -92,7 +92,7 @@ const tools = [
 // --- 3. CONFIGURAZIONE MODELLO ---
 // Usa il modello che preferisci (2.5-flash o 1.5-flash)
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash", 
+  model: "gemini-2.5-flash-lite", 
   tools: tools
 });
 
