@@ -27,18 +27,14 @@ async function shopifyFetch(query) {
 
 // --- 2. DEFINIZIONE STRUMENTI (RICERCA ROBUSTA) ---
 async function searchProducts(keyword) {
-  // FIX CRUCIALE: Rimuoviamo asterischi iniziali che rompono Shopify.
-  // Usiamo "keyword*" che cerca "keyword" e tutto ciò che inizia con essa.
-  // Esempio: "Accendin*" trova "Accendino", "Accendini", "Accendino Clipper".
-  
   let searchFilter = "";
   if (keyword) {
-      // Pulizia extra: togliamo spazi extra
       const cleanKeyword = keyword.trim();
+      // Cerca la parola e le sue varianti
       searchFilter = `, query: "${cleanKeyword}*"`;
   }
 
-  // Chiediamo i primi 10 prodotti per avere più chance di trovare quello giusto
+  // Chiediamo i primi 10 prodotti
   const query = `{
     products(first: 10 ${searchFilter}, sortKey: RELEVANCE) {
       edges {
@@ -57,13 +53,15 @@ async function searchProducts(keyword) {
   const data = await shopifyFetch(query);
   const products = data?.data?.products?.edges || [];
   
+  // Se non trova nulla, restituisce array vuoto, ma l'AI gestirà la cosa proponendo altro
   if (products.length === 0) return [];
 
   return products.map(p => ({
     name: p.node.title,
     type: p.node.productType,
-    price: p.node.priceRange.minVariantPrice.amount + " " + p.node.priceRange.minVariantPrice.currencyCode,
-    stock: p.node.totalInventory,
+    // Passiamo il prezzo per calcoli interni, ma diremo all'AI di non mostrarlo
+    price_internal: p.node.priceRange.minVariantPrice.amount, 
+    stock: p.node.totalInventory, // QUANTO NE RIMANE
     image: p.node.featuredImage ? p.node.featuredImage.url : "",
     link: `https://${cleanDomain}/products/${p.node.handle}`
   }));
@@ -74,13 +72,13 @@ const tools = [
     function_declarations: [
       {
         name: "searchProducts",
-        description: "Cerca prodotti nel catalogo.",
+        description: "Cerca prodotti nel catalogo per parola chiave.",
         parameters: {
             type: "OBJECT",
             properties: {
                 keyword: {
                     type: "STRING",
-                    description: "La parola chiave SINGOLARE da cercare (es. se utente dice 'accendini', cerca 'accendino')."
+                    description: "La parola chiave principale (es. 'tazza', 'maglia')."
                 }
             }
         }
@@ -90,9 +88,9 @@ const tools = [
 ];
 
 // --- 3. CONFIGURAZIONE MODELLO ---
-// Usa il modello che preferisci (2.5-flash o 1.5-flash)
+// Ho messo gemini-1.5-flash perché la versione 2.5-lite non è ancora standard e potrebbe dare errori
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash-lite", 
+  model: "gemini-1.5-flash", 
   tools: tools
 });
 
@@ -111,21 +109,31 @@ export default async function handler(req, res) {
     const chat = model.startChat({
       history: history || [],
       system_instruction: {
-        // ISTRUZIONI PER "TRADURRE" LE RICHIESTE DEGLI UTENTI
-        parts: [{ text: `Sei un assistente allo shopping intelligente sullo shop collegato alle pagine social de "Il Bresciano Malmostoso"
+        parts: [{ text: `
+        Sei l'AI Malmostosa, l'assistente ufficiale dello shop "Il Bresciano Malmostoso".
         
-        REGOLE D'ORO PER LA RICERCA:
-        1. TRADUZIONE MENTALE: L'utente non sa come si chiamano i prodotti. Tu devi capirlo.
-           - Se cerca "Maglietta" -> Cerca "T-Shirt"
-           - Se cerca "Felpa" -> Cerca "Hoodie" o "Crewneck"
-           - Se cerca "Accendino" -> Cerca Clipper
-        2. SINGOLARE: Converti SEMPRE le parole al singolare prima di cercare (es. "braccialetti" -> "braccialetto").
+        IL TUO CARATTERE:
+        - Sei efficiente, diretto e un po' "brusco" (malmostoso), ma alla fine aiuti sempre.
+        - Non usare troppi giri di parole. Vai al sodo.
         
-        FORMATO RISPOSTA:
-        Quando trovi prodotti, mostrali così:
-        ![Titolo](URL_IMMAGINE)
-        [Vedi Dettagli](URL_LINK)
-        Non mostrare i prezzi, solo il link.
+        REGOLE FERREE DI RICERCA (MISSIONE: TROVARE SOLUZIONI):
+        1. Non dire MAI "non ho trovato nulla". Se l'utente cerca una cosa che non c'è, usa la ricerca per trovare qualcosa di SIMILE o proponi l'articolo più venduto. Devi vendere.
+        2. Traduci mentalmente le richieste (es. "Felpa" -> cerca "Hoodie").
+        
+        REGOLE DI VISUALIZZAZIONE (OBBLIGATORIE):
+        - MOSTRA L'IMMAGINE: Usa la sintassi Markdown ![Nome](URL)
+        - MOSTRA LA DISPONIBILITÀ: Scrivi "Pezzi rimasti: X" (dove X è stock).
+        - MOSTRA IL LINK: Metti un link diretto tipo [Vedi il prodotto](URL).
+        - 🚫 NON MOSTRARE MAI IL PREZZO. Se l'utente lo chiede, rispondi: "Il prezzo lo vedi cliccando sul link, cambia spesso e non voglio sbagliare".
+        
+        FORMATO RISPOSTA IDEALE:
+        "Ecco cosa ho trovato per te:
+        
+        ![Nome Prodotto](URL_IMMAGINE)
+        **Nome Prodotto**
+        📦 Pezzi rimasti: [Stock]
+        🔗 [Vai al prodotto](URL_LINK)
+        "
         ` }]
       }
     });
