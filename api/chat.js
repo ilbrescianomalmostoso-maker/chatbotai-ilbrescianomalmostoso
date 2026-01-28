@@ -6,6 +6,7 @@ const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
 const cleanDomain = SHOPIFY_DOMAIN ? SHOPIFY_DOMAIN.replace('https://', '').replace(/\/$/, '') : "";
 
+
 // --- 1. FUNZIONE SHOPIFY ---
 async function shopifyFetch(query) {
   const url = `https://${cleanDomain}/admin/api/2024-01/graphql.json`;
