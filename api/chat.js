@@ -29,7 +29,19 @@ async function shopifyFetch(query) {
 async function searchProducts(keyword) {
   let searchFilter = "";
   if (keyword) {
-      const cleanKeyword = keyword.trim();
+      let cleanKeyword = keyword.trim().toLowerCase();
+
+      // IL DIZIONARIO "A PROVA DI BOMBA" NEL CODICE
+      if (cleanKeyword.includes("accendin")) {
+          cleanKeyword = "clipper";
+      } else if (cleanKeyword.includes("magli") || cleanKeyword.includes("tshirt")) {
+          cleanKeyword = "t-shirt";
+      } else if (cleanKeyword.includes("felp")) {
+          cleanKeyword = "hoodie"; // Cerca hoodie (puoi cambiare in 'crewneck' se preferisci)
+      } else if (cleanKeyword.includes("costum")) {
+          cleanKeyword = "swimwear";
+      }
+
       searchFilter = `, query: "${cleanKeyword}*"`;
   }
 
@@ -48,7 +60,7 @@ async function searchProducts(keyword) {
     }
   }`;
   
-  // Tentativo 1: ricerca specifica
+  // Tentativo 1: ricerca specifica con la parola tradotta
   let data = await shopifyFetch(buildQuery(searchFilter));
   let products = data?.data?.products?.edges || [];
   
@@ -61,12 +73,13 @@ async function searchProducts(keyword) {
   return products.map(p => ({
     name: p.node.title,
     type: p.node.productType,
-    price_internal: p.node.priceRange.minVariantPrice.amount, // Mantenuto internamente, l'AI sa che non deve mostrarlo
+    price_internal: p.node.priceRange.minVariantPrice.amount, 
     stock: p.node.totalInventory,
     image: p.node.featuredImage ? p.node.featuredImage.url : "",
     link: `https://${cleanDomain}/products/${p.node.handle}`
   }));
 }
+
 
 const tools = [
   {
