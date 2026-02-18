@@ -18,35 +18,21 @@ async function shopifyFetch(query) {
       },
       body: JSON.stringify({ query }),
     });
-    return await response.json();
+    const json = await response.json();
+    if (json.errors) console.error("Shopify GraphQL Error:", json.errors);
+    return json;
   } catch (e) {
     console.error("Fetch Error:", e);
     return null;
   }
 }
 
-// --- 2. DEFINIZIONE STRUMENTI E RICERCA CON FALLBACK ---
-async function searchProducts(keyword) {
-  let searchFilter = "";
-  if (keyword) {
-      let cleanKeyword = keyword.trim().toLowerCase();
-
-      // IL DIZIONARIO "A PROVA DI BOMBA" NEL CODICE
-      if (cleanKeyword.includes("accendin")) {
-          cleanKeyword = "clipper";
-      } else if (cleanKeyword.includes("magli") || cleanKeyword.includes("tshirt")) {
-          cleanKeyword = "t-shirt";
-      } else if (cleanKeyword.includes("felp")) {
-          cleanKeyword = "hoodie"; // Cerca hoodie (puoi cambiare in 'crewneck' se preferisci)
-      } else if (cleanKeyword.includes("costum")) {
-          cleanKeyword = "swimwear";
-      }
-
-      searchFilter = `, query: "${cleanKeyword}*"`;
-  }
-
-  const buildQuery = (filter) => `{
-    products(first: 20 ${filter}, sortKey: BEST_SELLING) {
+// --- 2. IL NUOVO STRUMENTO: RECUPERO INTERO CATALOGO ---
+async function getStoreCatalog() {
+  // Peschiamo fino a 150 prodotti attivi. Gemini li elabora in una frazione di secondo.
+  // Ho rimosso totalmente i prezzi per evitare che l'AI li legga.
+  const query = `{
+    products(first: 150, query: "status:active") {
       edges {
         node {
           title
@@ -54,47 +40,32 @@ async function searchProducts(keyword) {
           totalInventory
           productType
           featuredImage { url }
-          priceRange { minVariantPrice { amount currencyCode } }
         }
       }
     }
   }`;
   
-  // Tentativo 1: ricerca specifica con la parola tradotta
-  let data = await shopifyFetch(buildQuery(searchFilter));
-  let products = data?.data?.products?.edges || [];
-  
-  // Tentativo 2: Fallback sui best seller se la ricerca esatta fallisce
-  if (products.length === 0) {
-    data = await shopifyFetch(buildQuery("")); 
-    products = data?.data?.products?.edges || [];
-  }
+  const data = await shopifyFetch(query);
+  const products = data?.data?.products?.edges || [];
 
   return products.map(p => ({
     name: p.node.title,
     type: p.node.productType,
-    price_internal: p.node.priceRange.minVariantPrice.amount, 
     stock: p.node.totalInventory,
     image: p.node.featuredImage ? p.node.featuredImage.url : "",
     link: `https://${cleanDomain}/products/${p.node.handle}`
   }));
 }
 
-
 const tools = [
   {
     function_declarations: [
       {
-        name: "searchProducts",
-        description: "Cerca prodotti nel catalogo. Se la ricerca esatta fallisce, restituisce i best seller.",
+        name: "getStoreCatalog",
+        description: "Scarica il catalogo dei prodotti disponibili nello store per poterlo analizzare.",
         parameters: {
             type: "OBJECT",
-            properties: {
-                keyword: {
-                    type: "STRING",
-                    description: "La parola chiave principale (es. 'tazza', 'maglia')."
-                }
-            }
+            properties: {} // Nessun parametro necessario, scarica tutto
         }
       }
     ],
@@ -129,22 +100,16 @@ export default async function handler(req, res) {
         - Sei efficiente, diretto e un po' "brusco" (malmostoso), ma alla fine aiuti sempre.
         - Non usare troppi giri di parole. Vai al sodo.
         
-        MAPPA DEL CATALOGO (Usa queste associazioni mentali per la ricerca):
-        - Se cercano "Maglietta" o "Maglia" -> cerca "T-Shirt"
-        - Se cercano "Felpa" -> cerca "Hoodie" o "Crewneck"
-        - Se cercano "Accendino" -> cerca "Clipper"
-        - Se cercano "Costume" -> cerca "Costume" o "Swimwear"
-
         REGOLE FERREE DI RICERCA E VENDITA:
-        1. Hai a disposizione la lista dei prodotti restituiti dal sistema. Se la richiesta esatta dell'utente non è presente, NON DIRE MAI "non ho trovato nulla". 
-        2. Cerca nella lista ricevuta il prodotto più simile per categoria o proponi i best seller che vedi disponibili. Il tuo scopo è trovare una soluzione alternativa e vendere.
-        3. Fai capire all'utente che stai proponendo un'alternativa valida.
+        1. DEVI SEMPRE usare lo strumento 'getStoreCatalog' per leggere cosa c'è in negozio.
+        2. Usa la tua intelligenza semantica: confronta la richiesta del cliente con TUTTO il catalogo scaricato. Se chiede "accendino", capisci da solo che devi proporre "Clipper". Se chiede "costume", cerca "swimwear" o simili.
+        3. NON DIRE MAI "non ho trovato nulla". Trova sempre il prodotto più attinente o proponi un'alternativa forte.
         
         REGOLE DI VISUALIZZAZIONE (OBBLIGATORIE):
         - MOSTRA L'IMMAGINE: Usa la sintassi Markdown ![Nome](URL)
         - MOSTRA LA DISPONIBILITÀ: Scrivi "Pezzi rimasti: X" (dove X è stock).
         - MOSTRA IL LINK: Metti un link diretto tipo [Vedi il prodotto](URL).
-        - 🚫 NON MOSTRARE MAI IL PREZZO. Se l'utente lo chiede, rispondi: "Il prezzo lo vedi cliccando sul link, cambia spesso e non voglio sbagliare".
+        - 🚫 NON PARLARE MAI DI PREZZI, non li conosci. Se l'utente lo chiede, rispondi: "Il prezzo lo vedi cliccando sul link, non fare il tirchio".
         ` }]
       }
     });
@@ -156,16 +121,13 @@ export default async function handler(req, res) {
     if (functionCalls && functionCalls.length > 0) {
       const call = functionCalls[0];
       
-      if (call.name === "searchProducts") {
-        const args = call.args; 
-        const keyword = args.keyword || "";
-
-        const productData = await searchProducts(keyword);
+      if (call.name === "getStoreCatalog") {
+        const productData = await getStoreCatalog();
         
         const result2 = await chat.sendMessage(
           [{
             functionResponse: {
-              name: "searchProducts",
+              name: "getStoreCatalog",
               response: { products: productData }
             }
           }]
