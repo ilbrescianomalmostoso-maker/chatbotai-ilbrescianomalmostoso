@@ -6,7 +6,6 @@ const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
 const cleanDomain = SHOPIFY_DOMAIN ? SHOPIFY_DOMAIN.replace('https://', '').replace(/\/$/, '') : "";
 
-
 // --- 1. FUNZIONE SHOPIFY ---
 async function shopifyFetch(query) {
   const url = `https://${cleanDomain}/admin/api/2024-01/graphql.json`;
@@ -26,18 +25,16 @@ async function shopifyFetch(query) {
   }
 }
 
-// --- 2. DEFINIZIONE STRUMENTI (RICERCA ROBUSTA) ---
+// --- 2. DEFINIZIONE STRUMENTI E RICERCA CON FALLBACK ---
 async function searchProducts(keyword) {
   let searchFilter = "";
   if (keyword) {
       const cleanKeyword = keyword.trim();
-      // Cerca la parola e le sue varianti
       searchFilter = `, query: "${cleanKeyword}*"`;
   }
 
-  // Chiediamo i primi 10 prodotti
-  const query = `{
-    products(first: 10 ${searchFilter}, sortKey: RELEVANCE) {
+  const buildQuery = (filter) => `{
+    products(first: 20 ${filter}, sortKey: BEST_SELLING) {
       edges {
         node {
           title
@@ -51,18 +48,21 @@ async function searchProducts(keyword) {
     }
   }`;
   
-  const data = await shopifyFetch(query);
-  const products = data?.data?.products?.edges || [];
+  // Tentativo 1: ricerca specifica
+  let data = await shopifyFetch(buildQuery(searchFilter));
+  let products = data?.data?.products?.edges || [];
   
-  // Se non trova nulla, restituisce array vuoto, ma l'AI gestirà la cosa proponendo altro
-  if (products.length === 0) return [];
+  // Tentativo 2: Fallback sui best seller se la ricerca esatta fallisce
+  if (products.length === 0) {
+    data = await shopifyFetch(buildQuery("")); 
+    products = data?.data?.products?.edges || [];
+  }
 
   return products.map(p => ({
     name: p.node.title,
     type: p.node.productType,
-    // Passiamo il prezzo per calcoli interni, ma diremo all'AI di non mostrarlo
-    price_internal: p.node.priceRange.minVariantPrice.amount, 
-    stock: p.node.totalInventory, // QUANTO NE RIMANE
+    price_internal: p.node.priceRange.minVariantPrice.amount, // Mantenuto internamente, l'AI sa che non deve mostrarlo
+    stock: p.node.totalInventory,
     image: p.node.featuredImage ? p.node.featuredImage.url : "",
     link: `https://${cleanDomain}/products/${p.node.handle}`
   }));
@@ -73,7 +73,7 @@ const tools = [
     function_declarations: [
       {
         name: "searchProducts",
-        description: "Cerca prodotti nel catalogo per parola chiave.",
+        description: "Cerca prodotti nel catalogo. Se la ricerca esatta fallisce, restituisce i best seller.",
         parameters: {
             type: "OBJECT",
             properties: {
@@ -89,13 +89,12 @@ const tools = [
 ];
 
 // --- 3. CONFIGURAZIONE MODELLO ---
-// Ho messo gemini-1.5-flash perché la versione 2.5-lite non è ancora standard e potrebbe dare errori
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash", 
+  model: "gemini-1.5-flash", 
   tools: tools
 });
 
-// --- 4. HANDLER SERVER ---
+// --- 4. HANDLER SERVERLESS ---
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -117,24 +116,22 @@ export default async function handler(req, res) {
         - Sei efficiente, diretto e un po' "brusco" (malmostoso), ma alla fine aiuti sempre.
         - Non usare troppi giri di parole. Vai al sodo.
         
-        REGOLE FERREE DI RICERCA (MISSIONE: TROVARE SOLUZIONI):
-        1. Non dire MAI "non ho trovato nulla". Se l'utente cerca una cosa che non c'è, usa la ricerca per trovare qualcosa di SIMILE o proponi l'articolo più venduto. Devi vendere.
-        2. Traduci mentalmente le richieste (es. "Felpa" -> cerca "Hoodie").
+        MAPPA DEL CATALOGO (Usa queste associazioni mentali per la ricerca):
+        - Se cercano "Maglietta" o "Maglia" -> cerca "T-Shirt"
+        - Se cercano "Felpa" -> cerca "Hoodie" o "Crewneck"
+        - Se cercano "Accendino" -> cerca "Clipper"
+        - Se cercano "Costume" -> cerca "Costume" o "Swimwear"
+
+        REGOLE FERREE DI RICERCA E VENDITA:
+        1. Hai a disposizione la lista dei prodotti restituiti dal sistema. Se la richiesta esatta dell'utente non è presente, NON DIRE MAI "non ho trovato nulla". 
+        2. Cerca nella lista ricevuta il prodotto più simile per categoria o proponi i best seller che vedi disponibili. Il tuo scopo è trovare una soluzione alternativa e vendere.
+        3. Fai capire all'utente che stai proponendo un'alternativa valida.
         
         REGOLE DI VISUALIZZAZIONE (OBBLIGATORIE):
         - MOSTRA L'IMMAGINE: Usa la sintassi Markdown ![Nome](URL)
         - MOSTRA LA DISPONIBILITÀ: Scrivi "Pezzi rimasti: X" (dove X è stock).
         - MOSTRA IL LINK: Metti un link diretto tipo [Vedi il prodotto](URL).
         - 🚫 NON MOSTRARE MAI IL PREZZO. Se l'utente lo chiede, rispondi: "Il prezzo lo vedi cliccando sul link, cambia spesso e non voglio sbagliare".
-        
-        FORMATO RISPOSTA IDEALE:
-        "Ecco cosa ho trovato per te:
-        
-        ![Nome Prodotto](URL_IMMAGINE)
-        **Nome Prodotto**
-        📦 Pezzi rimasti: [Stock]
-        🔗 [Vai al prodotto](URL_LINK)
-        "
         ` }]
       }
     });
@@ -167,6 +164,10 @@ export default async function handler(req, res) {
     return res.status(200).json({ text: response.text() });
 
   } catch (error) {
+    console.error("Server Error:", error);
+    return res.status(500).json({ error: error.message });
+  }
+}
     console.error("Server Error:", error);
     return res.status(500).json({ error: error.message });
   }
