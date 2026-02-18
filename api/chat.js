@@ -1,99 +1,49 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_URL;
-const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-
+// Assicurati che in Vercel la variabile sia impostata senza https:// finale (es. shop.ilbrescianomalmostoso.it)
+const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_URL; 
 const cleanDomain = SHOPIFY_DOMAIN ? SHOPIFY_DOMAIN.replace('https://', '').replace(/\/$/, '') : "";
 
-// --- 1. FUNZIONE SHOPIFY SNELLA ---
-async function shopifyFetch(query) {
-  const url = `https://${cleanDomain}/admin/api/2024-01/graphql.json`;
+// --- 1. IL METODO "SNELLO E VELOCE" ---
+// Scarichiamo il feed pubblico del tuo sito. Niente token di sicurezza, niente GraphQL.
+async function getStoreCatalog() {
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-      },
-      body: JSON.stringify({ query }),
-    });
-    return await response.json();
+    const response = await fetch(`https://${cleanDomain}/products.json?limit=250`);
+    const data = await response.json();
+
+    if (!data.products) return [];
+
+    // Mappiamo solo nome e link per essere leggerissimi e non mandare in palla l'AI
+    return data.products.map(p => ({
+      nome: p.title,
+      link: `https://${cleanDomain}/products/${p.handle}`
+    }));
   } catch (e) {
-    console.error("Fetch Error:", e);
-    return null;
+    console.error("Errore catalogo pubblico:", e);
+    return [];
   }
-}
-
-// --- 2. RICERCA PROTETTA CON FALLBACK SICURO ---
-async function searchProducts(keyword) {
-  let cleanKeyword = keyword ? keyword.trim().toLowerCase() : "";
-  
-  // Il vocabolario salvavita: traduce istantaneamente prima di interrogare Shopify
-  if (cleanKeyword.includes("accendin")) cleanKeyword = "clipper";
-  if (cleanKeyword.includes("magli") || cleanKeyword.includes("tshirt") || cleanKeyword.includes("t-shirt")) cleanKeyword = "t-shirt";
-  if (cleanKeyword.includes("felp")) cleanKeyword = "hoodie";
-  if (cleanKeyword.includes("costum")) cleanKeyword = "swimwear";
-  if (cleanKeyword.includes("plaid") || cleanKeyword.includes("copert")) cleanKeyword = "plaid";
-
-  const searchFilter = cleanKeyword ? `, query: "${cleanKeyword}*"` : "";
-  
-  const buildQuery = (filter) => `{
-    products(first: 20 ${filter}) {
-      edges {
-        node {
-          title
-          handle
-          totalInventory
-        }
-      }
-    }
-  }`;
-  
-  let data = await shopifyFetch(buildQuery(searchFilter));
-  let products = data?.data?.products?.edges || [];
-  
-  // Se Shopify non trova la parola, peschiamo 20 articoli generali per far proporre alternative
-  if (products.length === 0) {
-    data = await shopifyFetch(buildQuery(""));
-    products = data?.data?.products?.edges || [];
-  }
-
-  // Pulizia estrema dei dati inviati all'AI: Niente prezzi, niente immagini rotte.
-  return products.map(p => ({
-    name: p.node.title,
-    stock: p.node.totalInventory,
-    link: `https://${cleanDomain}/products/${p.node.handle}`
-  }));
 }
 
 const tools = [
   {
     function_declarations: [
       {
-        name: "searchProducts",
-        description: "Cerca i prodotti nel database. Usalo sempre per rispondere alle richieste sui prodotti.",
-        parameters: {
-            type: "OBJECT",
-            properties: {
-                keyword: {
-                    type: "STRING",
-                    description: "La parola chiave da cercare"
-                }
-            }
-        }
+        name: "getStoreCatalog",
+        description: "Scarica tutto il catalogo del sito per confrontarlo con la richiesta dell'utente.",
+        parameters: { type: "OBJECT", properties: {} } // Nessun parametro, scarica tutto a prescindere
       }
     ],
   },
 ];
 
-// --- 3. CONFIGURAZIONE MODELLO ---
+// --- 2. CONFIGURAZIONE MODELLO ---
 const model = genAI.getGenerativeModel({
   model: "gemini-2.5-flash", 
   tools: tools
 });
 
-// --- 4. HANDLER ---
+// --- 3. HANDLER SERVERLESS ---
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -109,20 +59,22 @@ export default async function handler(req, res) {
       history: history || [],
       system_instruction: {
         parts: [{ text: `
-        Sei l'AI Malmostosa de "Il Bresciano Malmostoso". Rispondi in modo sbrigativo e diretto.
+        Sei l'AI Malmostosa, l'assistente ufficiale dello shop "Il Bresciano Malmostoso".
         
-        REGOLE VITALI E INFRANGIBILI:
-        1. USA SEMPRE lo strumento 'searchProducts'. 
-        2. NON DIRE MAI "Non abbiamo questo prodotto nel catalogo". Se la ricerca fallisce, il sistema ti restituisce altri prodotti: proponi quelli come alternative per vendere comunque.
-        3. NON PARLARE DI PREZZI, non li sai.
-        4. NON FORNIRE MAI DATI GREZZI O JSON.
+        IL TUO CARATTERE:
+        - Sei efficiente e diretto. Sei un po' brusco (malmostoso) ma aiuti sempre.
         
-        FORMATO DI RISPOSTA OBBLIGATORIO:
-        Mostra i prodotti trovati usando ESATTAMENTE questo schema pulito:
+        IL TUO MODO DI PENSARE (REGOLE VITALI):
+        1. DEVI SEMPRE usare lo strumento 'getStoreCatalog' non appena l'utente fa una domanda su un prodotto. Ti fornirà una lista di tutto ciò che c'è in negozio.
+        2. Quando ricevi la lista, usa la tua intelligenza semantica per cercare nel testo. 
+           - Se chiedono "accendino", scorri la lista e cerca "Clipper".
+           - Se chiedono "felpa", scorri la lista e cerca "Hoodie" o "Crewneck".
+           - Se chiedono "coperta", cerca "Plaid".
+        3. NON DIRE MAI E POI MAI "Mi dispiace, non abbiamo questo prodotto". Se non trovi la corrispondenza esatta, pesca 2 o 3 articoli casuali ma interessanti dalla lista e proponili dicendo: "Non ho quello che cerchi, ma guarda che bella roba abbiamo:".
         
-        **Nome Prodotto**
-        📦 Disponibilità: [Numero] pezzi
-        🔗 [Guarda qui](Link del prodotto)
+        FORMATO RISPOSTA:
+        **[Nome Prodotto Esatto]**
+        🔗 [Link del prodotto]
         ` }]
       }
     });
@@ -134,14 +86,14 @@ export default async function handler(req, res) {
     if (functionCalls && functionCalls.length > 0) {
       const call = functionCalls[0];
       
-      if (call.name === "searchProducts") {
-        const productData = await searchProducts(call.args.keyword || "");
+      if (call.name === "getStoreCatalog") {
+        const catalogData = await getStoreCatalog();
         
         const result2 = await chat.sendMessage(
           [{
             functionResponse: {
-              name: "searchProducts",
-              response: { products: productData }
+              name: "getStoreCatalog",
+              response: { products: catalogData }
             }
           }]
         );
