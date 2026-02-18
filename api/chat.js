@@ -4,15 +4,40 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_URL; 
 const cleanDomain = SHOPIFY_DOMAIN ? SHOPIFY_DOMAIN.replace('https://', '').replace(/\/$/, '') : "";
 
-// --- 1. RECUPERO CATALOGO ---
-async function getStoreCatalog() {
+// --- 1. MOTORE DI RICERCA INTERNO (TAGLIO ALLA FONTE) ---
+function getSearchTerm(keyword) {
+  const k = keyword.toLowerCase().trim();
+  if (k.includes("accendin")) return "clipper";
+  if (k.includes("magli") || k.includes("tshirt") || k.includes("t-shirt")) return "t-shirt";
+  if (k.includes("felp")) return "hoodie";
+  if (k.includes("costum")) return "swimwear";
+  if (k.includes("plaid") || k.includes("copert")) return "plaid";
+  return k;
+}
+
+async function searchStoreCatalog(keyword) {
   try {
     const response = await fetch(`https://${cleanDomain}/products.json?limit=250`);
     const data = await response.json();
 
     if (!data.products) return [];
 
-    return data.products.map(p => ({
+    const searchTerm = getSearchTerm(keyword);
+
+    // Filtriamo in Javascript
+    const filtered = data.products.filter(p => 
+      p.title.toLowerCase().includes(searchTerm) || 
+      p.product_type.toLowerCase().includes(searchTerm)
+    );
+
+    // Fallback: se non c'è corrispondenza, proponiamo i primi del catalogo generale
+    const results = filtered.length > 0 ? filtered : data.products;
+
+    // IL SEGRETO: Tagliamo l'array a un MASSIMO DI 5 PRODOTTI. 
+    // Gemini non saprà nemmeno che ne esistono altri.
+    const top5 = results.slice(0, 5);
+
+    return top5.map(p => ({
       nome: p.title,
       link: `https://${cleanDomain}/products/${p.handle}`
     }));
@@ -26,9 +51,18 @@ const tools = [
   {
     function_declarations: [
       {
-        name: "getStoreCatalog",
-        description: "Scarica tutto il catalogo del sito per confrontarlo con la richiesta dell'utente.",
-        parameters: { type: "OBJECT", properties: {} } 
+        name: "searchStoreCatalog",
+        description: "Cerca i prodotti nel catalogo usando una parola chiave. Restituisce un massimo di 5 prodotti.",
+        parameters: { 
+          type: "OBJECT", 
+          properties: {
+            keyword: {
+              type: "STRING",
+              description: "La parola chiave da cercare (es. 'accendini', 'felpa')."
+            }
+          },
+          required: ["keyword"]
+        } 
       }
     ],
   },
@@ -58,16 +92,12 @@ export default async function handler(req, res) {
         parts: [{ text: `
         Sei l'AI Malmostosa, l'assistente ufficiale dello shop "Il Bresciano Malmostoso".
         
-        REGOLE VITALI E INFRANGIBILI:
-        1. STRUMENTO OBBLIGATORIO: Usa 'getStoreCatalog' per leggere il catalogo.
-        2. ASSOCIAZIONI MENTALI: "accendino" -> cerca "Clipper", "felpa" -> "Hoodie", "coperta" -> "Plaid".
-        3. LIMITE ASSOLUTO (5 PRODOTTI): Estrai un MASSIMO di 5 prodotti pertinenti. Se ce ne sono di più, ignorali. Devi fermarti a 5. È un ordine rigoroso.
-        4. LINK IN CHIARO: Il widget non legge i link nascosti. Stampa l'URL per esteso visibile all'utente.
-        5. NESSUNA DOMANDA: È severamente vietato chiudere i messaggi o usare frasi con il punto di domanda ("?"). Usa solo istruzioni affermative (es. "Scrivimi per vedere il resto del catalogo."). Non chiedere mai niente all'utente.
-        
-        FORMATO RISPOSTA OBBLIGATORIO PER I PRODOTTI:
-        🔸 **[Nome Prodotto]**
-        👉 Clicca qui: https://www.robertomaiolino.it/blografik/2017/12/01/prodotto-e-packaging/
+        REGOLE VITALI:
+        1. STRUMENTO OBBLIGATORIO: Usa SEMPRE 'searchStoreCatalog' in base alla richiesta dell'utente.
+        2. FORMATO LINK HTML: Usa obbligatoriamente i tag HTML per mostrare i prodotti ricevuti dallo strumento in questo esatto modo:
+           <b>[Nome Prodotto]</b><br>
+           <a href="https://prodeldistribuzione.it/" target="_blank">Clicca qui</a><br><br>
+        3. NESSUNA DOMANDA: È severamente vietato terminare le frasi con un punto interrogativo ("?"). Utilizza esclusivamente esortazioni o frasi affermative (es. "Scrivimi se ti serve una mano per altri articoli.", "Fammi sapere se cerchi altro.").
         ` }]
       }
     });
@@ -79,13 +109,13 @@ export default async function handler(req, res) {
     if (functionCalls && functionCalls.length > 0) {
       const call = functionCalls[0];
       
-      if (call.name === "getStoreCatalog") {
-        const catalogData = await getStoreCatalog();
+      if (call.name === "searchStoreCatalog") {
+        const catalogData = await searchStoreCatalog(call.args.keyword || "");
         
         const result2 = await chat.sendMessage(
           [{
             functionResponse: {
-              name: "getStoreCatalog",
+              name: "searchStoreCatalog",
               response: { products: catalogData }
             }
           }]
