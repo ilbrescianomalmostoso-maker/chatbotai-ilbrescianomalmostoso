@@ -6,7 +6,7 @@ const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
 const cleanDomain = SHOPIFY_DOMAIN ? SHOPIFY_DOMAIN.replace('https://', '').replace(/\/$/, '') : "";
 
-// --- 1. FUNZIONE SHOPIFY ---
+// --- 1. FUNZIONE SHOPIFY SNELLA ---
 async function shopifyFetch(query) {
   const url = `https://${cleanDomain}/admin/api/2024-01/graphql.json`;
   try {
@@ -18,41 +18,51 @@ async function shopifyFetch(query) {
       },
       body: JSON.stringify({ query }),
     });
-    const json = await response.json();
-    if (json.errors) console.error("Shopify GraphQL Error:", json.errors);
-    return json;
+    return await response.json();
   } catch (e) {
     console.error("Fetch Error:", e);
     return null;
   }
 }
 
-// --- 2. IL NUOVO STRUMENTO: RECUPERO INTERO CATALOGO ---
-async function getStoreCatalog() {
-  // Peschiamo fino a 150 prodotti attivi. Gemini li elabora in una frazione di secondo.
-  // Ho rimosso totalmente i prezzi per evitare che l'AI li legga.
-  const query = `{
-    products(first: 150, query: "status:active") {
+// --- 2. RICERCA PROTETTA CON FALLBACK SICURO ---
+async function searchProducts(keyword) {
+  let cleanKeyword = keyword ? keyword.trim().toLowerCase() : "";
+  
+  // Il vocabolario salvavita: traduce istantaneamente prima di interrogare Shopify
+  if (cleanKeyword.includes("accendin")) cleanKeyword = "clipper";
+  if (cleanKeyword.includes("magli") || cleanKeyword.includes("tshirt") || cleanKeyword.includes("t-shirt")) cleanKeyword = "t-shirt";
+  if (cleanKeyword.includes("felp")) cleanKeyword = "hoodie";
+  if (cleanKeyword.includes("costum")) cleanKeyword = "swimwear";
+  if (cleanKeyword.includes("plaid") || cleanKeyword.includes("copert")) cleanKeyword = "plaid";
+
+  const searchFilter = cleanKeyword ? `, query: "${cleanKeyword}*"` : "";
+  
+  const buildQuery = (filter) => `{
+    products(first: 20 ${filter}) {
       edges {
         node {
           title
           handle
           totalInventory
-          productType
-          featuredImage { url }
         }
       }
     }
   }`;
   
-  const data = await shopifyFetch(query);
-  const products = data?.data?.products?.edges || [];
+  let data = await shopifyFetch(buildQuery(searchFilter));
+  let products = data?.data?.products?.edges || [];
+  
+  // Se Shopify non trova la parola, peschiamo 20 articoli generali per far proporre alternative
+  if (products.length === 0) {
+    data = await shopifyFetch(buildQuery(""));
+    products = data?.data?.products?.edges || [];
+  }
 
+  // Pulizia estrema dei dati inviati all'AI: Niente prezzi, niente immagini rotte.
   return products.map(p => ({
     name: p.node.title,
-    type: p.node.productType,
     stock: p.node.totalInventory,
-    image: p.node.featuredImage ? p.node.featuredImage.url : "",
     link: `https://${cleanDomain}/products/${p.node.handle}`
   }));
 }
@@ -61,11 +71,16 @@ const tools = [
   {
     function_declarations: [
       {
-        name: "getStoreCatalog",
-        description: "Scarica il catalogo dei prodotti disponibili nello store per poterlo analizzare.",
+        name: "searchProducts",
+        description: "Cerca i prodotti nel database. Usalo sempre per rispondere alle richieste sui prodotti.",
         parameters: {
             type: "OBJECT",
-            properties: {} // Nessun parametro necessario, scarica tutto
+            properties: {
+                keyword: {
+                    type: "STRING",
+                    description: "La parola chiave da cercare"
+                }
+            }
         }
       }
     ],
@@ -78,7 +93,7 @@ const model = genAI.getGenerativeModel({
   tools: tools
 });
 
-// --- 4. HANDLER SERVERLESS ---
+// --- 4. HANDLER ---
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -94,22 +109,20 @@ export default async function handler(req, res) {
       history: history || [],
       system_instruction: {
         parts: [{ text: `
-        Sei l'AI Malmostosa, l'assistente ufficiale dello shop "Il Bresciano Malmostoso".
+        Sei l'AI Malmostosa de "Il Bresciano Malmostoso". Rispondi in modo sbrigativo e diretto.
         
-        IL TUO CARATTERE:
-        - Sei efficiente, diretto e un po' "brusco" (malmostoso), ma alla fine aiuti sempre.
-        - Non usare troppi giri di parole. Vai al sodo.
+        REGOLE VITALI E INFRANGIBILI:
+        1. USA SEMPRE lo strumento 'searchProducts'. 
+        2. NON DIRE MAI "Non abbiamo questo prodotto nel catalogo". Se la ricerca fallisce, il sistema ti restituisce altri prodotti: proponi quelli come alternative per vendere comunque.
+        3. NON PARLARE DI PREZZI, non li sai.
+        4. NON FORNIRE MAI DATI GREZZI O JSON.
         
-        REGOLE FERREE DI RICERCA E VENDITA:
-        1. DEVI SEMPRE usare lo strumento 'getStoreCatalog' per leggere cosa c'è in negozio.
-        2. Usa la tua intelligenza semantica: confronta la richiesta del cliente con TUTTO il catalogo scaricato. Se chiede "accendino", capisci da solo che devi proporre "Clipper". Se chiede "costume", cerca "swimwear" o simili.
-        3. NON DIRE MAI "non ho trovato nulla". Trova sempre il prodotto più attinente o proponi un'alternativa forte.
+        FORMATO DI RISPOSTA OBBLIGATORIO:
+        Mostra i prodotti trovati usando ESATTAMENTE questo schema pulito:
         
-        REGOLE DI VISUALIZZAZIONE (OBBLIGATORIE):
-        - MOSTRA L'IMMAGINE: Usa la sintassi Markdown ![Nome](URL)
-        - MOSTRA LA DISPONIBILITÀ: Scrivi "Pezzi rimasti: X" (dove X è stock).
-        - MOSTRA IL LINK: Metti un link diretto tipo [Vedi il prodotto](URL).
-        - 🚫 NON PARLARE MAI DI PREZZI, non li conosci. Se l'utente lo chiede, rispondi: "Il prezzo lo vedi cliccando sul link, non fare il tirchio".
+        **Nome Prodotto**
+        📦 Disponibilità: [Numero] pezzi
+        🔗 [Guarda qui](Link del prodotto)
         ` }]
       }
     });
@@ -121,13 +134,13 @@ export default async function handler(req, res) {
     if (functionCalls && functionCalls.length > 0) {
       const call = functionCalls[0];
       
-      if (call.name === "getStoreCatalog") {
-        const productData = await getStoreCatalog();
+      if (call.name === "searchProducts") {
+        const productData = await searchProducts(call.args.keyword || "");
         
         const result2 = await chat.sendMessage(
           [{
             functionResponse: {
-              name: "getStoreCatalog",
+              name: "searchProducts",
               response: { products: productData }
             }
           }]
