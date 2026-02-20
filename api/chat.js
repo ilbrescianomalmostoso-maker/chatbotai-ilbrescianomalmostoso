@@ -10,9 +10,10 @@ function getSearchTerm(keyword) {
   if (k.includes("accendin")) return "clipper";
   if (k.includes("magli") || k.includes("tshirt") || k.includes("t-shirt")) return "t-shirt";
   if (k.includes("felp")) return "hoodie";
-  if (k.includes("costum")) return "swimwear";
+  if (k.includes("costum")) return "pantaloncini";
   if (k.includes("plaid") || k.includes("copert")) return "plaid";
   if (k.includes("PORTACHIAVI") || k.includes("portac")) return "potachiavi";
+  if (k.includes("salviettone") || k.includes("salviett")) return "telo";
   return k;
 }
 
