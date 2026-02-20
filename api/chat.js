@@ -12,6 +12,7 @@ function getSearchTerm(keyword) {
   if (k.includes("felp")) return "hoodie";
   if (k.includes("costum")) return "swimwear";
   if (k.includes("plaid") || k.includes("copert")) return "plaid";
+  if (k.includes("PORTACHIAVI") || k.includes("portac")) return "potachiavi";
   return k;
 }
 
